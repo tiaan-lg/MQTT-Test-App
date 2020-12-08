@@ -1,117 +1,151 @@
 ﻿using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
+using System.Data;
 using System.Linq;
-using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
-using MQTTnet;
-using MQTTnet.Client;
-using MQTTnet.Client.Connecting;
-using MQTTnet.Client.Disconnecting;
-using MQTTnet.Client.Options;
-using MQTTnet.Formatter;
-using MQTTnet.Protocol;
 
 namespace MQTT
 {
     class Program
     {
-        private const int Limmit = 10000;
+        private static int SubscriberCount { get; set; }
+
+        private static int PublisherCount { get; set; }
+
+        private static int PublishingRateSec { get; set; }
+
+        private static readonly Random Rng = new Random();
+
         static async Task Main(string[] args)
         {
-            var count = 0;
 
-            while (Mqtt.Clients.Count < Limmit)
+            Console.WriteLine("***********************************************************");
+            Console.WriteLine("**              MQTT IoT Connection Tester               **");
+            Console.WriteLine("***********************************************************");
+
+
+            Console.Write($"Enter amount of Subscriber: ");
+
+            var subscriberCount = 0;
+
+            while (!int.TryParse(Console.ReadLine(), out subscriberCount))
             {
-                var id = Guid.NewGuid().ToString();
-                await Mqtt.Connect(id);
+                Console.Write($"Enter amount of Subscriber: ");
             }
 
-            Console.WriteLine($"{DateTime.Now:g} - Connection limit of {Limmit} reached.");
-            Console.WriteLine($"Press ENTER to exit....");
+            SubscriberCount = subscriberCount;
 
+
+            Console.Write($"Enter amount of Publishers: ");
+
+            var publisherCount = 0;
+
+            while (!int.TryParse(Console.ReadLine(), out publisherCount))
+            {
+                Console.Write($"Enter amount of Publishers: ");
+            }
+
+            PublisherCount = publisherCount;
+
+            Console.Write($"Enter Publisher rate in sec: ");
+
+            var publisherRate = 0;
+
+            while (!int.TryParse(Console.ReadLine(), out publisherRate))
+            {
+                Console.Write($"Enter Publisher rate in sec: ");
+            }
+
+            PublishingRateSec = publisherRate;
+
+
+            Console.WriteLine($"Subscribers Set To {SubscriberCount}");
+            Console.WriteLine($"Publishers Set To {PublisherCount}");
+            Console.WriteLine($"Publishers Rate Set To {PublishingRateSec} sec");
+
+            PrintPublishStats();
+
+            await SubscriberTest();
+
+            await PublishFromApiTest();
+
+            Console.WriteLine($"{DateTime.Now:g} - Starting Publishers");
+
+            await PublisherTest();
+
+            Console.WriteLine($"{DateTime.Now:g} - Publishers sending messages");
+
+            Console.WriteLine($"Press ENTER to exit at anytime....");
             while (Console.ReadKey(true).Key != ConsoleKey.Enter)
             {
                 Console.WriteLine($"Press ENTER to exit....");
             }
         }
-    }
 
-
-    public static class Mqtt
-    {
-        private const string Host = "102.133.134.75";
-        //private const string Host = "127.0.0.1";
-        private const int Port = 1883;
-        private const string UserName = "test";
-        private const string Password = "Test1234";
-
-        private static readonly MqttFactory Factory = new MqttFactory();
-        public static readonly Dictionary<string,IMqttClient> Clients = new Dictionary<string,IMqttClient>();
-
-        public static async Task Connect(string clientId)
+        private static async Task SubscriberTest()
         {
-
-            var options = new MqttClientOptions
+            Console.WriteLine($"{DateTime.Now:g} - Connecting Subscribers");
+            while (Mqtt.Clients.Count < SubscriberCount)
             {
-                ClientId = clientId,
-                ProtocolVersion = MqttProtocolVersion.V311,
-                ChannelOptions = new MqttClientTcpOptions
-                {
-                    Server = Host,
-                    Port = Port,
-                    TlsOptions = new MqttClientTlsOptions
-                    {
-                        UseTls = false,
-                        IgnoreCertificateChainErrors = true,
-                        IgnoreCertificateRevocationErrors = true,
-                        AllowUntrustedCertificates = true
-                    },
-                    BufferSize = 2048
-                },
-                Credentials = new MqttClientCredentials
-                {
-                    Username = UserName,
-                    Password = Encoding.UTF8.GetBytes(Password)
-                },
-                CleanSession = true,
-                KeepAlivePeriod = TimeSpan.FromMinutes(2),
-                CommunicationTimeout = TimeSpan.FromSeconds(10)
+                var id = Guid.NewGuid().ToString();
+                await Mqtt.Connect(id, new[] { $"d/{id}" });
+                await Task.Delay(700);
+            }
+
+            Console.WriteLine($"{DateTime.Now:g} - All Subscribers Connected \t\t\t\t Avg Connection Time: {Mqtt.ConnectionTimes.Average()} ms");
+            await Task.Delay(2500);
+        }
+
+        private static async Task PublishFromApiTest()
+        {
+            Console.WriteLine($"{DateTime.Now:g} - Connecting API");
+            var client = await Mqtt.GetClient("api", Mqtt.Clients.Select(x => "a/" + x.Key).ToArray());
+            //Api sending 10 times faster then publishers
+            var timer = new System.Timers.Timer { Interval = PublishingRateSec * 1000 };
+            timer.Elapsed += async (sender, args) =>
+           {
+               await Mqtt.Publish(client, Mqtt.GetRandomTopic());
+           };
+
+            timer.Start();
+        }
+
+        private static async Task PublisherTest()
+        {
+            for (int i = 0; i < PublisherCount; i++)
+            {
+                StartRandomPublisher();
+                await Task.Delay(Rng.Next(PublishingRateSec * 1000));
+            }
+        }
+
+        private static void StartRandomPublisher()
+        {
+            var publisher = Mqtt.GetPublisher();
+            Console.WriteLine($"{DateTime.Now:g} - Starting Publisher {publisher.Key}");
+            var timer = new System.Timers.Timer { Interval = PublishingRateSec * 1000 };
+            timer.Elapsed += async (sender, args) =>
+           {
+               await Mqtt.Publish(publisher.Value, $"a/{publisher.Key}");
+           };
+
+            timer.Start();
+        }
+
+        private static void PrintPublishStats()
+        {
+            var timer = new System.Timers.Timer { Interval = 30000 };
+            timer.Elapsed += (sender, args) =>
+            {
+                var min = Mqtt.MessageSendTimes.Any() ? Mqtt.MessageSendTimes.Min() : 0;
+                var avg = Mqtt.MessageSendTimes.Any() ? Mqtt.MessageSendTimes.Average(): 0;
+                var max = Mqtt.MessageSendTimes.Any() ? Mqtt.MessageSendTimes.Max() : 0;
+                Console.WriteLine("-------------------------------------------------------------------------------------------------------------------------");
+                Console.WriteLine($"{DateTime.Now:g} - Subscribers: {Mqtt.Clients.Count} \t Publishers: {Mqtt.Publishers.Count} \t Rate: {PublishingRateSec} sec");
+                Console.WriteLine($"{DateTime.Now:g} - Message Latency \t Min:{min:f0} ms \t Avg:{avg:f0} ms \t Max:{max:f0} ms");
+                Console.WriteLine("-------------------------------------------------------------------------------------------------------------------------");
             };
 
-
-            var client = Factory.CreateMqttClient();
-            client.ConnectedHandler = new MqttClientConnectedHandlerDelegate((args) => OnConnected(args,client));
-            client.DisconnectedHandler = new MqttClientDisconnectedHandlerDelegate((args) => OnDisconnected(args,clientId));
-            try
-            {
-                await client.ConnectAsync(options);
-            }
-            catch (Exception exception)
-            {
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine(exception);
-                Console.ForegroundColor = ConsoleColor.White;
-            }
-        }
-
-        private static void OnConnected(MqttClientConnectedEventArgs x, IMqttClient client)
-        {
-            Clients.Add(client.Options.ClientId,client);
-            Console.ForegroundColor = ConsoleColor.White;
-            Console.WriteLine($"{DateTime.Now:g} - {client.Options.ClientId} Connected");
-            Console.WriteLine($"{DateTime.Now:g} -- {Clients.Count} Clients Connected");
-            Console.ForegroundColor = ConsoleColor.White;
-        }
-
-        private static void OnDisconnected(MqttClientDisconnectedEventArgs x, string clientId)
-        {
-            Clients.Remove(clientId);
-            Console.ForegroundColor = ConsoleColor.White;
-            Console.WriteLine($"{DateTime.Now:g} - {clientId} Disconnected");
-            Console.WriteLine($"{DateTime.Now:g} -- {Clients.Count} Clients Connected");
-            Console.ForegroundColor = ConsoleColor.White;
+            timer.Start();
         }
     }
 }
