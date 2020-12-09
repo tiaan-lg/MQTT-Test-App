@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Data;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace MQTT
@@ -8,6 +9,8 @@ namespace MQTT
     class Program
     {
         private static int SubscriberCount { get; set; }
+
+        public static int ConnectedClients { get; set; }
 
         private static int PublisherCount { get; set; }
 
@@ -17,6 +20,7 @@ namespace MQTT
 
         static async Task Main(string[] args)
         {
+            ConnectedClients = 0;
 
             Console.WriteLine("***********************************************************");
             Console.WriteLine("**              MQTT IoT Connection Tester               **");
@@ -35,44 +39,46 @@ namespace MQTT
             SubscriberCount = subscriberCount;
 
 
-            Console.Write($"Enter amount of Publishers: ");
+            //Console.Write($"Enter amount of Publishers: ");
 
-            var publisherCount = 0;
+            //var publisherCount = 0;
 
-            while (!int.TryParse(Console.ReadLine(), out publisherCount))
-            {
-                Console.Write($"Enter amount of Publishers: ");
-            }
+            //while (!int.TryParse(Console.ReadLine(), out publisherCount))
+            //{
+            //    Console.Write($"Enter amount of Publishers: ");
+            //}
 
-            PublisherCount = publisherCount;
+            //PublisherCount = publisherCount;
 
-            Console.Write($"Enter Publisher rate in sec: ");
+            //Console.Write($"Enter Publisher rate in sec: ");
 
-            var publisherRate = 0;
+            //var publisherRate = 0;
 
-            while (!int.TryParse(Console.ReadLine(), out publisherRate))
-            {
-                Console.Write($"Enter Publisher rate in sec: ");
-            }
+            //while (!int.TryParse(Console.ReadLine(), out publisherRate))
+            //{
+            //    Console.Write($"Enter Publisher rate in sec: ");
+            //}
 
-            PublishingRateSec = publisherRate;
+            //PublishingRateSec = publisherRate;
 
 
             Console.WriteLine($"Subscribers Set To {SubscriberCount}");
-            Console.WriteLine($"Publishers Set To {PublisherCount}");
-            Console.WriteLine($"Publishers Rate Set To {PublishingRateSec} sec");
+            //Console.WriteLine($"Publishers Set To {PublisherCount}");
+            //Console.WriteLine($"Publishers Rate Set To {PublishingRateSec} sec");
 
             PrintPublishStats();
 
-            await SubscriberTest();
+            //await SubscriberTest();
 
-            await PublishFromApiTest();
+            //await PublishFromApiTest();
 
-            Console.WriteLine($"{DateTime.Now:g} - Starting Publishers");
+            //Console.WriteLine($"{DateTime.Now:g} - Starting Publishers");
 
-            await PublisherTest();
+            //await PublisherTest();
 
-            Console.WriteLine($"{DateTime.Now:g} - Publishers sending messages");
+            //Console.WriteLine($"{DateTime.Now:g} - Publishers sending messages");
+
+            SubscriberTestSpinning();
 
             Console.WriteLine($"Press ENTER to exit at anytime....");
             while (Console.ReadKey(true).Key != ConsoleKey.Enter)
@@ -88,30 +94,49 @@ namespace MQTT
             {
                 var id = Guid.NewGuid().ToString();
                 await Mqtt.Connect(id, new[] { $"d/{id}" });
-                await Task.Delay(700);
             }
 
             Console.WriteLine($"{DateTime.Now:g} - All Subscribers Connected \t\t\t\t Avg Connection Time: {Mqtt.ConnectionTimes.Average()} ms");
             await Task.Delay(2500);
         }
 
+        private static void SubscriberTestSpinning()
+        {
+            Console.WriteLine($"{DateTime.Now:g} - Connecting Subscribers");
+
+            while (true)
+            {
+                if (ConnectedClients < SubscriberCount)
+                {
+                    ConnectedClients++;
+                    var id = Guid.NewGuid().ToString();
+                    var task = Mqtt.Connect(id, new[] {$"d/{id}"});
+                    Task.Run(() => task);
+                }
+                else
+                {
+                    Thread.Sleep(1000);
+                }
+            }
+        }
+
         private static async Task PublishFromApiTest()
         {
             Console.WriteLine($"{DateTime.Now:g} - Connecting API");
-            var client = await Mqtt.GetClient("api", Mqtt.Clients.Select(x => "a/" + x.Key).ToArray());
-            //Api sending 10 times faster then publishers
+            var client = await Mqtt.GetClient($"api-{Guid.NewGuid().ToString().Substring(0, 8)}", Mqtt.Clients.Select(x => "a/" + x.Key).ToArray());
+            
             var timer = new System.Timers.Timer { Interval = PublishingRateSec * 1000 };
             timer.Elapsed += async (sender, args) =>
-           {
+            {
                await Mqtt.Publish(client, Mqtt.GetRandomTopic());
-           };
+            };
 
             timer.Start();
         }
 
         private static async Task PublisherTest()
         {
-            for (int i = 0; i < PublisherCount; i++)
+            while (Mqtt.Publishers.Count < PublisherCount)
             {
                 StartRandomPublisher();
                 await Task.Delay(Rng.Next(PublishingRateSec * 1000));
@@ -121,28 +146,35 @@ namespace MQTT
         private static void StartRandomPublisher()
         {
             var publisher = Mqtt.GetPublisher();
-            Console.WriteLine($"{DateTime.Now:g} - Starting Publisher {publisher.Key}");
+
+            if (publisher == null)
+            {
+                return;
+            }
+
+            Console.WriteLine($"{DateTime.Now:g} - Starting Publisher {publisher.Value.Key}");
             var timer = new System.Timers.Timer { Interval = PublishingRateSec * 1000 };
             timer.Elapsed += async (sender, args) =>
-           {
-               await Mqtt.Publish(publisher.Value, $"a/{publisher.Key}");
-           };
+            {
+               await Mqtt.Publish(publisher.Value.Value, $"a/{publisher.Value.Key}");
+            };
 
             timer.Start();
         }
 
         private static void PrintPublishStats()
         {
-            var timer = new System.Timers.Timer { Interval = 30000 };
+            var timer = new System.Timers.Timer { Interval = 15000 };
             timer.Elapsed += (sender, args) =>
             {
                 var min = Mqtt.MessageSendTimes.Any() ? Mqtt.MessageSendTimes.Min() : 0;
-                var avg = Mqtt.MessageSendTimes.Any() ? Mqtt.MessageSendTimes.Average(): 0;
+                var avg = Mqtt.MessageSendTimes.Any() ? Mqtt.MessageSendTimes.Average() : 0;
                 var max = Mqtt.MessageSendTimes.Any() ? Mqtt.MessageSendTimes.Max() : 0;
-                Console.WriteLine("-------------------------------------------------------------------------------------------------------------------------");
-                Console.WriteLine($"{DateTime.Now:g} - Subscribers: {Mqtt.Clients.Count} \t Publishers: {Mqtt.Publishers.Count} \t Rate: {PublishingRateSec} sec");
-                Console.WriteLine($"{DateTime.Now:g} - Message Latency \t Min:{min:f0} ms \t Avg:{avg:f0} ms \t Max:{max:f0} ms");
-                Console.WriteLine("-------------------------------------------------------------------------------------------------------------------------");
+                Console.WriteLine("---------------------------------------------------------------------------------------------------------");
+                Console.WriteLine($"{DateTime.Now:g} - Clients: {Mqtt.Clients.Count}/{SubscriberCount}");
+                //Console.WriteLine($"{DateTime.Now:g} - Subscribers: {Mqtt.Clients.Count}/{SubscriberCount} \t Publishers: {Mqtt.Publishers.Count}/{PublisherCount} \t Rate: {PublishingRateSec} sec");
+                //Console.WriteLine($"{DateTime.Now:g} - Message Latency \t Min:{min:f0} ms \t Avg:{avg:f0} ms \t Max:{max:f0} ms");
+                Console.WriteLine("---------------------------------------------------------------------------------------------------------");
             };
 
             timer.Start();

@@ -17,7 +17,7 @@ namespace MQTT
 {
     public static class Mqtt
     {
-        private const string Host = "127.0.0.1";
+        private const string Host = "102.133.134.75";
         private const int Port = 1883;
 
         private const string UserName = "guest";
@@ -59,7 +59,7 @@ namespace MQTT
                 },
                 CleanSession = true,
                 KeepAlivePeriod = TimeSpan.FromMinutes(2),
-                CommunicationTimeout = TimeSpan.FromSeconds(15)
+                CommunicationTimeout = TimeSpan.FromSeconds(60)
             };
 
 
@@ -69,8 +69,8 @@ namespace MQTT
             client.DisconnectedHandler = new MqttClientDisconnectedHandlerDelegate((args) => OnDisconnected(args, clientId));
             try
             {
-                var st = new Stopwatch();
-                st.Start();
+                //var st = new Stopwatch();
+                //st.Start();
                 await client.ConnectAsync(options);
                 
                 if (topics != null && topics.Length != 0)
@@ -81,15 +81,15 @@ namespace MQTT
                     }
                 }
 
-                st.Stop();
-                Console.WriteLine($"{DateTime.Now:g} - {client.Options.ClientId.PadRight(36)} Connected \t {st.ElapsedMilliseconds} ms");
-                ConnectionTimes.Add((int) st.ElapsedMilliseconds);
+                //st.Stop();
+                //Console.WriteLine($"{DateTime.Now:g} - {client.Options.ClientId.PadRight(36)} Connected \t {st.ElapsedMilliseconds} ms");
+                Console.WriteLine($"{DateTime.Now:g} - {client.Options.ClientId.PadRight(36)} Connected");
+                //ConnectionTimes.Add((int) st.ElapsedMilliseconds);
             }
             catch (Exception exception)
             {
-                Console.WriteLine($"=======================================================================================================================================================");
-                Console.WriteLine(exception);
-                Console.WriteLine($"=======================================================================================================================================================");
+                Program.ConnectedClients--;
+                LogExc(exception);
             }
         }
 
@@ -145,9 +145,7 @@ namespace MQTT
             }
             catch (Exception exception)
             {
-                Console.WriteLine($"==============================================================================================================");
-                Console.WriteLine(exception);
-                Console.WriteLine($"==============================================================================================================");
+                LogExc(exception);
             }
 
             return client;
@@ -155,37 +153,57 @@ namespace MQTT
 
         public static async Task Publish(IMqttClient client, string topic)
         {
-            var payload = new byte[1024];
+            try
+            {
+                var payload = new byte[1024];
 
-            Random.NextBytes(payload);
+                Random.NextBytes(payload);
 
-            var message = new MqttApplicationMessageBuilder()
-                .WithTopic(topic)
-                .WithPayload(payload)
-                .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
-                .Build();
+                var message = new MqttApplicationMessageBuilder()
+                    .WithTopic(topic)
+                    .WithPayload(payload)
+                    .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
+                    .Build();
 
-            var st = new Stopwatch();
-            st.Start();
-            await client.PublishAsync(message);
-            st.Stop();
+                var st = new Stopwatch();
+                st.Start();
+                await client.PublishAsync(message);
+                st.Stop();
 
 
-            Console.WriteLine($"{DateTime.Now:g} - {client.Options.ClientId.PadRight(36)} \t Message to {topic} \t {st.ElapsedMilliseconds} ms");
-            MessageSendTimes.Enqueue((int)st.ElapsedMilliseconds);
+                Console.WriteLine($"{DateTime.Now:g} - {client.Options.ClientId.PadRight(36)} \t Message to {topic} \t {st.ElapsedMilliseconds} ms");
+                MessageSendTimes.Enqueue((int)st.ElapsedMilliseconds);
+            }
+            catch (Exception exception)
+            {
+                LogExc(exception);
+            }
         }
-
 
         public static string GetRandomTopic()
         {
             return $"d/{Clients.ElementAt(Random.Next(0, Clients.Count)).Key}";
         }
 
-        public static KeyValuePair<string, IMqttClient> GetPublisher()
+        public static KeyValuePair<string, IMqttClient>? GetPublisher()
         {
-            var publisher = Clients.ElementAt(Random.Next(0, Clients.Count));
-            Publishers.TryAdd(publisher.Key,publisher.Value);
-            return publisher;
+            try
+            {
+                var publisher = Clients.ElementAt(Random.Next(0, Clients.Count));
+
+                if (Publishers.TryAdd(publisher.Key, publisher.Value))
+                {
+                    return publisher;
+                }
+
+            }
+            catch (Exception e)
+            {
+                LogExc(e);
+                return null;
+            }
+            
+            return null;
         }
 
         private static void OnConnected(MqttClientConnectedEventArgs x, IMqttClient client)
@@ -196,9 +214,17 @@ namespace MQTT
 
         private static void OnDisconnected(MqttClientDisconnectedEventArgs x, string clientId)
         {
+            Program.ConnectedClients--;
             Clients.TryRemove(clientId, out _);
             Console.WriteLine($"{DateTime.Now:g} - {clientId.PadRight(36)} Disconnected");
             Console.WriteLine($"{DateTime.Now:g} - {Clients.Count} Clients Connected");
+        }
+
+        private static void LogExc(Exception ex)
+        {
+            Console.WriteLine($"==========================================================================================");
+            Console.WriteLine(ex);
+            Console.WriteLine($"==========================================================================================");
         }
     }
 }
